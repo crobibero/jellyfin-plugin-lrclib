@@ -110,6 +110,7 @@ public class LrcLibProvider : ILyricProvider
                 queryStringBuilder
                     .Append("track_name=")
                     .Append(HttpUtility.UrlEncode(request.SongName));
+
                 if (!ExcludeArtistName)
                 {
                     string artist;
@@ -150,6 +151,7 @@ public class LrcLibProvider : ILyricProvider
             };
 
             var httpClient = _httpClientFactory.CreateClient(NamedClient.Default);
+
             if (UseStrictSearch)
             {
                 var response = await httpClient.GetFromJsonAsync<LrcLibSearchResponse>(requestUri.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -158,54 +160,7 @@ public class LrcLibProvider : ILyricProvider
                     return Enumerable.Empty<RemoteLyricInfo>();
                 }
 
-                var results = new List<RemoteLyricInfo>();
-                if (!string.IsNullOrEmpty(response.PlainLyrics))
-                {
-                    var stream = new MemoryStream(Encoding.UTF8.GetBytes(response.PlainLyrics));
-                    results.Add(new RemoteLyricInfo
-                    {
-                        Id = $"{response.Id}_{PlainSuffix}",
-                        ProviderName = Name,
-                        Metadata = new LyricMetadata
-                        {
-                            Album = response.AlbumName,
-                            Artist = response.ArtistName,
-                            Title = response.TrackName,
-                            Length = TimeSpan.FromSeconds(response.Duration ?? 0).Ticks,
-                            IsSynced = false
-                        },
-                        Lyrics = new LyricResponse
-                        {
-                            Format = PlainFormat,
-                            Stream = stream
-                        }
-                    });
-                }
-
-                if (!string.IsNullOrEmpty(response.SyncedLyrics))
-                {
-                    var stream = new MemoryStream(Encoding.UTF8.GetBytes(response.SyncedLyrics));
-                    results.Add(new RemoteLyricInfo
-                    {
-                        Id = $"{response.Id}_{SyncedSuffix}",
-                        ProviderName = Name,
-                        Metadata = new LyricMetadata
-                        {
-                            Album = response.AlbumName,
-                            Artist = response.ArtistName,
-                            Title = response.TrackName,
-                            Length = TimeSpan.FromSeconds(response.Duration ?? 0).Ticks,
-                            IsSynced = true
-                        },
-                        Lyrics = new LyricResponse
-                        {
-                            Format = SyncedFormat,
-                            Stream = stream
-                        }
-                    });
-                }
-
-                return results;
+                return GetRemoteLyrics(response);
             }
             else
             {
@@ -218,54 +173,12 @@ public class LrcLibProvider : ILyricProvider
                 var results = new List<RemoteLyricInfo>();
                 foreach (var item in response)
                 {
-                    if (!string.IsNullOrEmpty(item.PlainLyrics))
-                    {
-                        var stream = new MemoryStream(Encoding.UTF8.GetBytes(item.PlainLyrics));
-                        results.Add(new RemoteLyricInfo
-                        {
-                            Id = $"{item.Id}_{PlainSuffix}",
-                            ProviderName = Name,
-                            Metadata = new LyricMetadata
-                            {
-                                Album = item.AlbumName,
-                                Artist = item.ArtistName,
-                                Title = item.TrackName,
-                                Length = TimeSpan.FromSeconds(item.Duration ?? 0).Ticks,
-                                IsSynced = false
-                            },
-                            Lyrics = new LyricResponse
-                            {
-                                Format = PlainFormat,
-                                Stream = stream
-                            }
-                        });
-                    }
-
-                    if (!string.IsNullOrEmpty(item.SyncedLyrics))
-                    {
-                        var stream = new MemoryStream(Encoding.UTF8.GetBytes(item.SyncedLyrics));
-                        results.Add(new RemoteLyricInfo
-                        {
-                            Id = $"{item.Id}_{SyncedSuffix}",
-                            ProviderName = Name,
-                            Metadata = new LyricMetadata
-                            {
-                                Album = item.AlbumName,
-                                Artist = item.ArtistName,
-                                Title = item.TrackName,
-                                Length = TimeSpan.FromSeconds(item.Duration ?? 0).Ticks,
-                                IsSynced = true
-                            },
-                            Lyrics = new LyricResponse
-                            {
-                                Format = SyncedFormat,
-                                Stream = stream
-                            }
-                        });
-                    }
+                    results.AddRange(GetRemoteLyrics(item));
                 }
 
-                return results;
+                var sortedResults = results.OrderByDescending(x => x.Metadata.IsSynced);
+
+                return sortedResults;
             }
         }
         catch (HttpRequestException ex)
@@ -332,5 +245,58 @@ public class LrcLibProvider : ILyricProvider
                 id);
             throw new ResourceNotFoundException("Unable to get results for id {Id}");
         }
+    }
+
+    private List<RemoteLyricInfo> GetRemoteLyrics(LrcLibSearchResponse response)
+    {
+        var results = new List<RemoteLyricInfo>();
+
+        if (!string.IsNullOrEmpty(response.SyncedLyrics))
+        {
+            var stream = new MemoryStream(Encoding.UTF8.GetBytes(response.SyncedLyrics));
+            results.Add(new RemoteLyricInfo
+            {
+                Id = $"{response.Id}_{SyncedSuffix}",
+                ProviderName = Name,
+                Metadata = new LyricMetadata
+                {
+                    Album = response.AlbumName,
+                    Artist = response.ArtistName,
+                    Title = response.TrackName,
+                    Length = TimeSpan.FromSeconds(response.Duration ?? 0).Ticks,
+                    IsSynced = true
+                },
+                Lyrics = new LyricResponse
+                {
+                    Format = SyncedFormat,
+                    Stream = stream
+                }
+            });
+        }
+
+        if (!string.IsNullOrEmpty(response.PlainLyrics))
+        {
+            var stream = new MemoryStream(Encoding.UTF8.GetBytes(response.PlainLyrics));
+            results.Add(new RemoteLyricInfo
+            {
+                Id = $"{response.Id}_{PlainSuffix}",
+                ProviderName = Name,
+                Metadata = new LyricMetadata
+                {
+                    Album = response.AlbumName,
+                    Artist = response.ArtistName,
+                    Title = response.TrackName,
+                    Length = TimeSpan.FromSeconds(response.Duration ?? 0).Ticks,
+                    IsSynced = false
+                },
+                Lyrics = new LyricResponse
+                {
+                    Format = PlainFormat,
+                    Stream = stream
+                }
+            });
+        }
+
+        return results;
     }
 }
