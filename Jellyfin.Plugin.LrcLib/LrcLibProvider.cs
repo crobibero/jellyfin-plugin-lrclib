@@ -60,126 +60,11 @@ public class LrcLibProvider : ILyricProvider
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        if (string.IsNullOrEmpty(request.SongName))
-        {
-            _logger.LogInformation("Song name is required");
-            return Enumerable.Empty<RemoteLyricInfo>();
-        }
-
         try
         {
-            var queryStringBuilder = new StringBuilder();
-            if (UseStrictSearch)
-            {
-                string artist;
-                if (request.ArtistNames is not null
-                    && request.ArtistNames.Count > 0)
-                {
-                    artist = request.ArtistNames[0];
-                }
-                else
-                {
-                    _logger.LogInformation("Artist name is required");
-                    return Enumerable.Empty<RemoteLyricInfo>();
-                }
-
-                if (string.IsNullOrEmpty(request.AlbumName))
-                {
-                    _logger.LogInformation("Album name is required");
-                    return Enumerable.Empty<RemoteLyricInfo>();
-                }
-
-                if (request.Duration is null)
-                {
-                    _logger.LogInformation("Duration is required");
-                    return Enumerable.Empty<RemoteLyricInfo>();
-                }
-
-                queryStringBuilder
-                    .Append("track_name=")
-                    .Append(HttpUtility.UrlEncode(request.SongName))
-                    .Append("&artist_name=")
-                    .Append(HttpUtility.UrlEncode(artist))
-                    .Append("&album_name=")
-                    .Append(HttpUtility.UrlEncode(request.AlbumName))
-                    .Append("&duration=")
-                    .Append(TimeSpan.FromTicks(request.Duration.Value).TotalSeconds.ToString(CultureInfo.InvariantCulture));
-            }
-            else
-            {
-                queryStringBuilder
-                    .Append("track_name=")
-                    .Append(HttpUtility.UrlEncode(request.SongName));
-
-                if (!ExcludeArtistName)
-                {
-                    string artist;
-                    if (request.ArtistNames is not null
-                        && request.ArtistNames.Count > 0)
-                    {
-                        artist = request.ArtistNames[0];
-                    }
-                    else
-                    {
-                        _logger.LogInformation("Artist name is required");
-                        return Enumerable.Empty<RemoteLyricInfo>();
-                    }
-
-                    queryStringBuilder
-                        .Append("&artist_name=")
-                        .Append(HttpUtility.UrlEncode(artist));
-                }
-
-                if (!ExcludeAlbumName)
-                {
-                    if (string.IsNullOrEmpty(request.AlbumName))
-                    {
-                        _logger.LogInformation("Album name is required");
-                        return Enumerable.Empty<RemoteLyricInfo>();
-                    }
-
-                    queryStringBuilder
-                        .Append("&album_name=")
-                        .Append(HttpUtility.UrlEncode(request.AlbumName));
-                }
-            }
-
-            var requestUri = new UriBuilder(BaseUrl)
-            {
-                Path = UseStrictSearch ? "/api/get" : "/api/search",
-                Query = queryStringBuilder.ToString()
-            };
-
-            var httpClient = _httpClientFactory.CreateClient(NamedClient.Default);
-
-            if (UseStrictSearch)
-            {
-                var response = await httpClient.GetFromJsonAsync<LrcLibSearchResponse>(requestUri.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (response is null)
-                {
-                    return Enumerable.Empty<RemoteLyricInfo>();
-                }
-
-                return GetRemoteLyrics(response);
-            }
-            else
-            {
-                var response = await httpClient.GetFromJsonAsync<IReadOnlyList<LrcLibSearchResponse>>(requestUri.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (response is null)
-                {
-                    return Enumerable.Empty<RemoteLyricInfo>();
-                }
-
-                var results = new List<RemoteLyricInfo>();
-                foreach (var item in response)
-                {
-                    results.AddRange(GetRemoteLyrics(item));
-                }
-
-                var sortedResults = results.OrderByDescending(x => x.Metadata.IsSynced);
-
-                return sortedResults;
-            }
+            return UseStrictSearch
+                ? await GetExactMatch(request, cancellationToken).ConfigureAwait(false)
+                : await GetFuzzyMatch(request, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
         {
@@ -245,6 +130,137 @@ public class LrcLibProvider : ILyricProvider
                 id);
             throw new ResourceNotFoundException("Unable to get results for id {Id}");
         }
+    }
+
+    private async Task<IEnumerable<RemoteLyricInfo>> GetExactMatch(
+    LyricSearchRequest request,
+    CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(request.SongName))
+        {
+            _logger.LogInformation("Song name is required");
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        string artist;
+        if (request.ArtistNames is not null
+            && request.ArtistNames.Count > 0)
+        {
+            artist = request.ArtistNames[0];
+        }
+        else
+        {
+            _logger.LogInformation("Artist name is required");
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        if (string.IsNullOrEmpty(request.AlbumName))
+        {
+            _logger.LogInformation("Album name is required");
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        if (request.Duration is null)
+        {
+            _logger.LogInformation("Duration is required");
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        var queryStringBuilder = new StringBuilder()
+            .Append("track_name=")
+            .Append(HttpUtility.UrlEncode(request.SongName))
+            .Append("&artist_name=")
+            .Append(HttpUtility.UrlEncode(artist))
+            .Append("&album_name=")
+            .Append(HttpUtility.UrlEncode(request.AlbumName))
+            .Append("&duration=")
+            .Append(TimeSpan.FromTicks(request.Duration.Value).TotalSeconds.ToString(CultureInfo.InvariantCulture));
+        var requestUri = new UriBuilder(BaseUrl)
+        {
+            Path = "/api/get",
+            Query = queryStringBuilder.ToString()
+        };
+
+        var httpClient = _httpClientFactory.CreateClient(NamedClient.Default);
+
+        var response = await httpClient.GetFromJsonAsync<LrcLibSearchResponse>(requestUri.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (response is null)
+        {
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        return GetRemoteLyrics(response);
+    }
+
+    private async Task<IEnumerable<RemoteLyricInfo>> GetFuzzyMatch(
+        LyricSearchRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(request.SongName))
+        {
+            _logger.LogInformation("Song name is required");
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        var queryStringBuilder = new StringBuilder()
+            .Append("track_name=")
+            .Append(HttpUtility.UrlEncode(request.SongName));
+
+        if (!ExcludeArtistName)
+        {
+            string artist;
+            if (request.ArtistNames is not null
+                && request.ArtistNames.Count > 0)
+            {
+                artist = request.ArtistNames[0];
+            }
+            else
+            {
+                _logger.LogInformation("Artist name is required");
+                return Enumerable.Empty<RemoteLyricInfo>();
+            }
+
+            queryStringBuilder
+                .Append("&artist_name=")
+                .Append(HttpUtility.UrlEncode(artist));
+        }
+
+        if (!ExcludeAlbumName)
+        {
+            if (string.IsNullOrEmpty(request.AlbumName))
+            {
+                _logger.LogInformation("Album name is required");
+                return Enumerable.Empty<RemoteLyricInfo>();
+            }
+
+            queryStringBuilder
+                .Append("&album_name=")
+                .Append(HttpUtility.UrlEncode(request.AlbumName));
+        }
+
+        var requestUri = new UriBuilder(BaseUrl)
+        {
+            Path = "/api/search",
+            Query = queryStringBuilder.ToString()
+        };
+
+        var httpClient = _httpClientFactory.CreateClient(NamedClient.Default);
+
+        var response = await httpClient.GetFromJsonAsync<IReadOnlyList<LrcLibSearchResponse>>(requestUri.Uri, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (response is null)
+        {
+            return Enumerable.Empty<RemoteLyricInfo>();
+        }
+
+        var results = new List<RemoteLyricInfo>();
+        foreach (var item in response)
+        {
+            results.AddRange(GetRemoteLyrics(item));
+        }
+
+        var sortedResults = results.OrderByDescending(x => x.Metadata.IsSynced);
+
+        return sortedResults;
     }
 
     private List<RemoteLyricInfo> GetRemoteLyrics(LrcLibSearchResponse response)
